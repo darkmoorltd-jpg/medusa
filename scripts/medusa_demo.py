@@ -144,7 +144,7 @@ def load_models():
 p_model, b_model, l_model = load_models()
 
 # -------------------------------------------------------------------
-# Helper: guess modality
+# Helper: guess modality from filename + brightness
 # -------------------------------------------------------------------
 def guess_modality(img_array, filename):
     avg = img_array.mean()
@@ -180,11 +180,24 @@ st.markdown("<div style='text-align: center; margin: 2rem 0;'>"
              "</div>", unsafe_allow_html=True)
 
 uploads = st.file_uploader(
-    "",
+    "Upload medical images",   # non‑empty label for accessibility
     type=["jpg", "jpeg", "png"],
     accept_multiple_files=True,
     label_visibility="collapsed"
 )
+
+# -------------------------------------------------------------------
+# Manual modality override (shown after files are uploaded)
+# -------------------------------------------------------------------
+if uploads:
+    modality_override = st.radio(
+        "Modality (override if auto‑detection fails):",
+        ["Auto‑Detect", "Chest X‑Ray", "Brain MRI", "Lung CT"],
+        horizontal=True,
+        index=0
+    )
+else:
+    modality_override = "Auto‑Detect"
 
 # -------------------------------------------------------------------
 # Process and display results
@@ -198,7 +211,16 @@ if uploads:
             st.error(f"Could not read {upload.name}")
             continue
 
-        modality = guess_modality(img, upload.name)
+        # Use manual override if selected, otherwise auto‑detect
+        if modality_override == "Chest X‑Ray":
+            modality = "xray"
+        elif modality_override == "Brain MRI":
+            modality = "mri"
+        elif modality_override == "Lung CT":
+            modality = "ct"
+        else:
+            modality = guess_modality(img, upload.name)
+
         modality_names = {"xray": "Chest X‑Ray", "mri": "Brain MRI", "ct": "Lung CT"}
         mod_display = modality_names.get(modality, "Unknown")
 
@@ -237,7 +259,7 @@ if uploads:
                     class_idx = 0
                 icon = "🫁"
 
-        # Generate Grad‑CAM heatmap
+        # Generate Grad‑CAM heatmap (target = patch_embed)
         if model_used is not None:
             target_layer = model_used.encoder.patch_embed
             hm = gradcam(model_used, img_t, target_layer, class_idx)
@@ -248,7 +270,7 @@ if uploads:
         else:
             superimposed = None
 
-        # --- Layout: original image (left) + Grad‑CAM overlay (right) + results (below) ---
+        # Layout: original + heatmap
         col_img1, col_img2 = st.columns(2)
         with col_img1:
             st.image(img, caption="Original Image", use_container_width=True, clamp=True)
@@ -273,6 +295,7 @@ if uploads:
                          f"</div>", unsafe_allow_html=True)
             st.progress(float(prob_val))
         st.markdown("</div>", unsafe_allow_html=True)
+
         st.markdown("<br>", unsafe_allow_html=True)
 else:
     st.markdown("<div style='text-align: center; margin-top: 4rem; color: #888;'>"
@@ -287,5 +310,5 @@ else:
 st.markdown("<hr style='border: 1px solid #3a3a5a; margin-top: 3rem;'>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #666; font-size: 0.8rem;'>"
              "MEDUSA · 850K params · CPU‑only · v1.0<br>"
-             "<a href='https://github.com/yourusername/medusa' style='color: #888;'>GitHub</a>"
+             "<a href='https://github.com/darkmoorltd-jpg/medusa' style='color: #888;'>GitHub</a>"
              "</p>", unsafe_allow_html=True)
