@@ -163,13 +163,17 @@ def guess_modality(img_array, filename):
         return "mri"
 
 # -------------------------------------------------------------------
-# UI Header
+# UI Header with DARKMOOR lettuce emoji branding
 # -------------------------------------------------------------------
 col1, col2, col3 = st.columns([1, 3, 1])
 with col2:
-    st.markdown("<h1 style='text-align: center; font-size: 3rem; margin-bottom: 0;'>🧠 MEDUSA</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; font-size: 1.2rem; color: #b0b0d0;'>Multi‑modal Diagnostic AI</p>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; font-size: 0.9rem; color: #8888aa;'>Pneumonia · Brain Tumour · Lung Cancer</p>", unsafe_allow_html=True)
+    logo_col, title_col = st.columns([1, 5])
+    with logo_col:
+        st.markdown("<div style='font-size: 60px; text-align: center;'>🥬</div>", unsafe_allow_html=True)
+    with title_col:
+        st.markdown("<h1 style='text-align: center; font-size: 3rem; margin-bottom: 0;'>🧠 MEDUSA</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; font-size: 1.2rem; color: #b0b0d0;'>Multi‑modal Diagnostic AI</p>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; font-size: 0.9rem; color: #8888aa;'>Pneumonia · Brain Tumour · Lung Cancer</p>", unsafe_allow_html=True)
     st.markdown("<hr style='border: 1px solid #3a3a5a;'>", unsafe_allow_html=True)
 
 # -------------------------------------------------------------------
@@ -180,7 +184,7 @@ st.markdown("<div style='text-align: center; margin: 2rem 0;'>"
              "</div>", unsafe_allow_html=True)
 
 uploads = st.file_uploader(
-    "Upload medical images",   # non‑empty label for accessibility
+    "Upload medical images",
     type=["jpg", "jpeg", "png"],
     accept_multiple_files=True,
     label_visibility="collapsed"
@@ -305,10 +309,17 @@ else:
                  "</div>", unsafe_allow_html=True)
 
 # -------------------------------------------------------------------
-# Footer
+# Footer – DARKMOOR LTD branding with lettuce emoji
 # -------------------------------------------------------------------
 st.markdown("<hr style='border: 1px solid #3a3a5a; margin-top: 3rem;'>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #666; font-size: 0.8rem;'>"
+col_f1, col_f2, col_f3 = st.columns(3)
+with col_f2:
+    st.markdown("<div style='text-align: center; font-size: 40px;'>🥬</div>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #888; font-size: 0.9rem;'>"
+                 "Powered by <b>DARKMOOR LTD</b><br>"
+                 "📧 <a href='mailto:Darkmoorltd@gmail.com' style='color: #aaa;'>Darkmoorltd@gmail.com</a>"
+                 "</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #555; font-size: 0.8rem;'>"
              "MEDUSA · 850K params · CPU‑only · v1.0<br>"
-             "<a href='https://github.com/darkmoorltd-jpg/medusa' style='color: #888;'>GitHub</a>"
+             "<a href='https://github.com/darkmoorltd-jpg/medusa' style='color: #666;'>GitHub</a>"
              "</p>", unsafe_allow_html=True)
