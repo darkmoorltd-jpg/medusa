@@ -1,21 +1,8 @@
---find-links https://download.pytorch.org/whl/cu118
 torch
 torchvision
-torchaudio
-pytorch-lightning
-monai
-nibabel
-pydicom
-opencv-python
-albumentations
-transformers
-einops
-timm
-scikit-learn
-matplotlib
-jupyterlab
-tensorboard
 streamlit
+opencv-python
 pandas
 numpy
 Pillow
+scikit-learn
