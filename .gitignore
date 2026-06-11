@@ -4,3 +4,6 @@ lightning_logs/
 __pycache__/
 *.pyc
 .DS_Store
+!medusa_tiny_pneumonia.pt
+!medusa_tiny_brain_tumor_v2.pt
+!medusa_tiny_lung_cancer_v2.pt
