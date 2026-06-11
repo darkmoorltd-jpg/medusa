@@ -15,3 +15,7 @@ scikit-learn
 matplotlib
 jupyterlab
 tensorboard
+streamlit
+pandas
+numpy
+Pillow
