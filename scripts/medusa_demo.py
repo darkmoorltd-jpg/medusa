@@ -163,17 +163,13 @@ def guess_modality(img_array, filename):
         return "mri"
 
 # -------------------------------------------------------------------
-# UI Header with DARKMOOR lettuce emoji branding
+# UI Header (clean, no logo)
 # -------------------------------------------------------------------
 col1, col2, col3 = st.columns([1, 3, 1])
 with col2:
-    logo_col, title_col = st.columns([1, 5])
-    with logo_col:
-        st.markdown("<div style='font-size: 60px; text-align: center;'>🥬</div>", unsafe_allow_html=True)
-    with title_col:
-        st.markdown("<h1 style='text-align: center; font-size: 3rem; margin-bottom: 0;'>🧠 MEDUSA</h1>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; font-size: 1.2rem; color: #b0b0d0;'>Multi‑modal Diagnostic AI</p>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; font-size: 0.9rem; color: #8888aa;'>Pneumonia · Brain Tumour · Lung Cancer</p>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; font-size: 3rem; margin-bottom: 0;'>🧠 MEDUSA</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; font-size: 1.2rem; color: #b0b0d0;'>Multi‑modal Diagnostic AI</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; font-size: 0.9rem; color: #8888aa;'>Pneumonia · Brain Tumour · Lung Cancer</p>", unsafe_allow_html=True)
     st.markdown("<hr style='border: 1px solid #3a3a5a;'>", unsafe_allow_html=True)
 
 # -------------------------------------------------------------------
@@ -309,7 +305,7 @@ else:
                  "</div>", unsafe_allow_html=True)
 
 # -------------------------------------------------------------------
-# Footer – DARKMOOR LTD branding with lettuce emoji
+# Footer – DARKMOOR LTD branding (lettuce emoji only here)
 # -------------------------------------------------------------------
 st.markdown("<hr style='border: 1px solid #3a3a5a; margin-top: 3rem;'>", unsafe_allow_html=True)
 col_f1, col_f2, col_f3 = st.columns(3)
