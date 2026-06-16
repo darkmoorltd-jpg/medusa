@@ -1,0 +1,11 @@
+venv/
+data/
+lightning_logs/
+__pycache__/
+*.pyc
+.DS_Store
+medusa-firebase-key.json
+medusa-firebase-key.json.json
+.streamlit/secrets.toml
+firebase_key_compact.txt
+firebase_key_string.txt

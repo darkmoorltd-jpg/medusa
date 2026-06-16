@@ -1,0 +1,11 @@
+model:
+  name: medusa_vit_huge
+  img_size_2d: 224
+  img_size_3d: 128
+  patch_size: 16
+  in_chans: 1
+  embed_dim: 1024
+  depth: 24
+  num_heads: 16
+  num_modalities: 6
+  pretrained_path: null
