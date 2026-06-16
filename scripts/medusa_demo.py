@@ -139,9 +139,14 @@ def guess_modality(img, fname):
     else: return "mri"
 
 # -------------------------------------------------------------------
-# PDF generation
+# PDF generation – all strings use ASCII hyphens only
 # -------------------------------------------------------------------
 def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, hospital_name="DARKMOOR LTD"):
+    # Replace any non-ASCII hyphen that might slip through
+    modality = modality.replace("\u2011", "-").replace("\u2013", "-").replace("\u2014", "-")
+    patient_id = patient_id.replace("\u2011", "-").replace("\u2013", "-").replace("\u2014", "-")
+    hospital_name = hospital_name.replace("\u2011", "-").replace("\u2013", "-").replace("\u2014", "-")
+
     pdf = FPDF(orientation='P', unit='mm', format='A4')
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
@@ -204,6 +209,7 @@ def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, h
     pdf.ln()
     pdf.set_font("Helvetica","",10)
     for label, prob in predictions:
+        label = label.replace("\u2011", "-").replace("\u2013", "-").replace("\u2014", "-")
         pdf.cell(80,7,label,border=1)
         pdf.cell(40,7,f"{prob:.1%}",border=1,align='C')
         pdf.ln()
@@ -232,13 +238,13 @@ if "patient_records" not in st.session_state:
 col1, col2, col3 = st.columns([1,3,1])
 with col2:
     st.markdown("<h1 style='text-align:center;font-size:3rem;'>🧠 MEDUSA</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align:center;color:#b0b0d0;'>Multi‑modal Diagnostic AI</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center;color:#b0b0d0;'>Multi-modal Diagnostic AI</p>", unsafe_allow_html=True)
     st.markdown("<hr style='border:1px solid #3a3a5a;'>", unsafe_allow_html=True)
 
 # -------------------------------------------------------------------
 # Patient ID & history
 # -------------------------------------------------------------------
-patient_id = st.text_input("Patient ID (optional — leave blank to skip history)", value="")
+patient_id = st.text_input("Patient ID (optional - leave blank to skip history)", value="")
 if patient_id and patient_id in st.session_state.patient_records:
     with st.expander(f"📋 History for Patient {patient_id}"):
         for scan in st.session_state.patient_records[patient_id][-5:]:
@@ -247,22 +253,22 @@ if patient_id and patient_id in st.session_state.patient_records:
 # -------------------------------------------------------------------
 # Upload section
 # -------------------------------------------------------------------
-uploads = st.file_uploader("Upload chest X‑rays, brain MRIs, or lung CT slices", type=["jpg","jpeg","png"], accept_multiple_files=True, label_visibility="collapsed")
+uploads = st.file_uploader("Upload chest X-rays, brain MRIs, or lung CT slices", type=["jpg","jpeg","png"], accept_multiple_files=True, label_visibility="collapsed")
 
 if uploads:
-    override = st.radio("Modality (override if auto‑detection fails):", ["Auto‑Detect", "Chest X‑Ray", "Brain MRI", "Lung CT"], horizontal=True)
+    override = st.radio("Modality (override if auto-detection fails):", ["Auto-Detect", "Chest X-Ray", "Brain MRI", "Lung CT"], horizontal=True)
 
     for upload in uploads:
         file_bytes = np.asarray(bytearray(upload.read()), dtype=np.uint8)
         img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
         if img is None: continue
 
-        if override == "Chest X‑Ray": modality = "xray"
+        if override == "Chest X-Ray": modality = "xray"
         elif override == "Brain MRI": modality = "mri"
         elif override == "Lung CT": modality = "ct"
         else: modality = guess_modality(img, upload.name)
 
-        mod_names = {"xray":"Chest X‑Ray","mri":"Brain MRI","ct":"Lung CT"}
+        mod_names = {"xray":"Chest X-Ray","mri":"Brain MRI","ct":"Lung CT"}
         mod_disp = mod_names.get(modality, "Unknown")
 
         img_resized = cv2.resize(img, (224,224))
@@ -320,7 +326,7 @@ if uploads:
             st.image(img, caption="Original Image", width='stretch', clamp=True)
         with col_img2:
             if superimposed is not None:
-                st.image(superimposed, caption="MEDUSA Focus (Grad‑CAM)", width='stretch', clamp=True)
+                st.image(superimposed, caption="MEDUSA Focus (Grad-CAM)", width='stretch', clamp=True)
 
         st.markdown(f"<div class='diagnosis-card'><h3>{icon} {mod_disp} Analysis</h3>", unsafe_allow_html=True)
         if "Normal" in pred or "Healthy" in pred: st.success(f"## {pred}")
@@ -348,4 +354,4 @@ if uploads:
         st.markdown("<br>", unsafe_allow_html=True)
 
 st.markdown("<hr style='border:1px solid #3a3a5a;margin-top:3rem;'>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center;color:#888;'>🥬 Powered by DARKMOOR LTD · Darkmoorltd@gmail.com<br>MEDUSA · 850K params · CPU‑only · v1.0</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;color:#888;'>🥬 Powered by DARKMOOR LTD · Darkmoorltd@gmail.com<br>MEDUSA · 850K params · CPU-only · v1.0</p>", unsafe_allow_html=True)
