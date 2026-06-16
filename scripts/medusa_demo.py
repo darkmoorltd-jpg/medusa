@@ -4,6 +4,7 @@ from PIL import Image
 from io import BytesIO
 import base64, time, datetime, tempfile
 import torch.nn as nn
+from fpdf import FPDF
 
 # -------------------------------------------------------------------
 # Page config
@@ -24,7 +25,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------------
-# TinyViT + classifiers (self‑contained – no training scripts needed)
+# TinyViT + classifiers (all in one file)
 # -------------------------------------------------------------------
 class TransformerBlock(nn.Module):
     def __init__(self, dim, num_heads, mlp_ratio=4):
@@ -62,18 +63,27 @@ class PneumoniaClassifier(nn.Module):
         super().__init__()
         self.encoder = TinyViT()
         self.head = nn.Linear(128, 2)
+    def forward(self, x):
+        feats = self.encoder(x)
+        return self.head(feats[:, 0, :])
 
 class BrainTumorClassifier(nn.Module):
     def __init__(self):
         super().__init__()
         self.encoder = TinyViT()
         self.head = nn.Linear(128, 4)
+    def forward(self, x):
+        feats = self.encoder(x)
+        return self.head(feats[:, 0, :])
 
 class LungCancerClassifier(nn.Module):
     def __init__(self):
         super().__init__()
         self.encoder = TinyViT()
         self.head = nn.Linear(128, 3)
+    def forward(self, x):
+        feats = self.encoder(x)
+        return self.head(feats[:, 0, :])
 
 # -------------------------------------------------------------------
 # Model loading (cached)
@@ -132,10 +142,10 @@ def guess_modality(img, fname):
 # PDF generation
 # -------------------------------------------------------------------
 def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, hospital_name="DARKMOOR LTD"):
-    from fpdf import FPDF
     pdf = FPDF(orientation='P', unit='mm', format='A4')
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
+    # Header
     pdf.set_fill_color(30, 30, 50)
     pdf.rect(0, 0, 210, 30, 'F')
     pdf.set_text_color(255,255,255)
@@ -162,6 +172,7 @@ def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, h
     pdf.set_font("Helvetica","",10)
     pdf.cell(0,6,datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),ln=1)
     pdf.ln(6)
+    # Images
     pdf.set_font("Helvetica","B",12)
     pdf.cell(0,8,"IMAGES",ln=1)
     pdf.ln(2)
@@ -182,6 +193,7 @@ def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, h
     pdf.text(x_right, y_img+80, "AI Focus (Grad-CAM)")
     pdf.set_y(y_img+85)
     pdf.ln(8)
+    # Findings
     pdf.set_font("Helvetica","B",12)
     pdf.cell(0,8,"FINDINGS",ln=1)
     pdf.ln(2)
@@ -196,9 +208,11 @@ def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, h
         pdf.cell(40,7,f"{prob:.1%}",border=1,align='C')
         pdf.ln()
     pdf.ln(5)
+    # Disclaimer
     pdf.set_font("Helvetica","I",7)
     pdf.set_text_color(100,100,100)
     pdf.multi_cell(0,4,"Disclaimer: MEDUSA is an AI screening tool. This report is intended to assist qualified radiologists; it does not constitute a final medical diagnosis. Always correlate with clinical findings.")
+    # Footer
     pdf.set_y(-20)
     pdf.set_font("Helvetica","",7)
     pdf.set_text_color(150,150,150)
@@ -303,10 +317,10 @@ if uploads:
 
         col_img1, col_img2 = st.columns(2)
         with col_img1:
-            st.image(img, caption="Original Image", use_container_width=True, clamp=True)
+            st.image(img, caption="Original Image", width='stretch', clamp=True)
         with col_img2:
             if superimposed is not None:
-                st.image(superimposed, caption="MEDUSA Focus (Grad‑CAM)", use_container_width=True, clamp=True)
+                st.image(superimposed, caption="MEDUSA Focus (Grad‑CAM)", width='stretch', clamp=True)
 
         st.markdown(f"<div class='diagnosis-card'><h3>{icon} {mod_disp} Analysis</h3>", unsafe_allow_html=True)
         if "Normal" in pred or "Healthy" in pred: st.success(f"## {pred}")
