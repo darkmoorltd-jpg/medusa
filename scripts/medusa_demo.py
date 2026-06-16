@@ -3,11 +3,7 @@ import torch, cv2, sys, numpy as np
 from PIL import Image
 from io import BytesIO
 import base64, time, datetime, tempfile
-sys.path.insert(0, '.')
-from scripts.finetune_tiny_pneumonia import TinyClassifier
-from scripts.finetune_tiny_brain_tumor_mae import TinyBrainTumorClassifier
-from scripts.finetune_tiny_lung_cancer import TinyLungCancerClassifier
-from fpdf import FPDF
+import torch.nn as nn
 
 # -------------------------------------------------------------------
 # Page config
@@ -28,19 +24,71 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------------
+# TinyViT + classifiers (self‑contained – no training scripts needed)
+# -------------------------------------------------------------------
+class TransformerBlock(nn.Module):
+    def __init__(self, dim, num_heads, mlp_ratio=4):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+        self.norm2 = nn.LayerNorm(dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, dim * mlp_ratio), nn.GELU(), nn.Linear(dim * mlp_ratio, dim)
+        )
+    def forward(self, x):
+        x = x + self.attn(self.norm1(x), self.norm1(x), self.norm1(x))[0]
+        x = x + self.mlp(self.norm2(x))
+        return x
+
+class TinyViT(nn.Module):
+    def __init__(self, img_size=224, patch_size=16, in_chans=1, embed_dim=128, depth=4, num_heads=4):
+        super().__init__()
+        num_patches = (img_size // patch_size) ** 2
+        self.patch_embed = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.randn(1, num_patches + 1, embed_dim))
+        self.blocks = nn.Sequential(*[TransformerBlock(embed_dim, num_heads) for _ in range(depth)])
+        self.norm = nn.LayerNorm(embed_dim)
+    def forward(self, x):
+        B = x.shape[0]
+        x = self.patch_embed(x).flatten(2).transpose(1, 2)
+        cls = self.cls_token.expand(B, -1, -1)
+        x = torch.cat([cls, x], dim=1) + self.pos_embed
+        x = self.blocks(x)
+        return self.norm(x)
+
+class PneumoniaClassifier(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.encoder = TinyViT()
+        self.head = nn.Linear(128, 2)
+
+class BrainTumorClassifier(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.encoder = TinyViT()
+        self.head = nn.Linear(128, 4)
+
+class LungCancerClassifier(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.encoder = TinyViT()
+        self.head = nn.Linear(128, 3)
+
+# -------------------------------------------------------------------
 # Model loading (cached)
 # -------------------------------------------------------------------
 @st.cache_resource
 def load_models():
-    p = TinyClassifier(num_classes=2)
+    p = PneumoniaClassifier()
     p.load_state_dict(torch.load('medusa_tiny_pneumonia.pt', map_location='cpu', weights_only=False), strict=False)
     p.eval()
-    b = TinyBrainTumorClassifier(num_classes=4)
+    b = BrainTumorClassifier()
     b.load_state_dict(torch.load('medusa_tiny_brain_tumor_v2.pt', map_location='cpu', weights_only=False), strict=False)
     b.eval()
     l = None
     try:
-        l = TinyLungCancerClassifier(num_classes=3)
+        l = LungCancerClassifier()
         l.load_state_dict(torch.load('medusa_tiny_lung_cancer_v2.pt', map_location='cpu', weights_only=False), strict=False)
         l.eval()
     except: pass
@@ -84,10 +132,10 @@ def guess_modality(img, fname):
 # PDF generation
 # -------------------------------------------------------------------
 def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, hospital_name="DARKMOOR LTD"):
+    from fpdf import FPDF
     pdf = FPDF(orientation='P', unit='mm', format='A4')
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
-    # Header
     pdf.set_fill_color(30, 30, 50)
     pdf.rect(0, 0, 210, 30, 'F')
     pdf.set_text_color(255,255,255)
@@ -114,7 +162,6 @@ def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, h
     pdf.set_font("Helvetica","",10)
     pdf.cell(0,6,datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),ln=1)
     pdf.ln(6)
-    # Images
     pdf.set_font("Helvetica","B",12)
     pdf.cell(0,8,"IMAGES",ln=1)
     pdf.ln(2)
@@ -135,7 +182,6 @@ def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, h
     pdf.text(x_right, y_img+80, "AI Focus (Grad-CAM)")
     pdf.set_y(y_img+85)
     pdf.ln(8)
-    # Findings
     pdf.set_font("Helvetica","B",12)
     pdf.cell(0,8,"FINDINGS",ln=1)
     pdf.ln(2)
@@ -150,11 +196,9 @@ def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, h
         pdf.cell(40,7,f"{prob:.1%}",border=1,align='C')
         pdf.ln()
     pdf.ln(5)
-    # Disclaimer
     pdf.set_font("Helvetica","I",7)
     pdf.set_text_color(100,100,100)
     pdf.multi_cell(0,4,"Disclaimer: MEDUSA is an AI screening tool. This report is intended to assist qualified radiologists; it does not constitute a final medical diagnosis. Always correlate with clinical findings.")
-    # Footer
     pdf.set_y(-20)
     pdf.set_font("Helvetica","",7)
     pdf.set_text_color(150,150,150)
@@ -166,7 +210,7 @@ def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, h
 # Session state for patient history
 # -------------------------------------------------------------------
 if "patient_records" not in st.session_state:
-    st.session_state.patient_records = {}   # patient_id -> list of scans
+    st.session_state.patient_records = {}
 
 # -------------------------------------------------------------------
 # UI Header
@@ -183,7 +227,7 @@ with col2:
 patient_id = st.text_input("Patient ID (optional — leave blank to skip history)", value="")
 if patient_id and patient_id in st.session_state.patient_records:
     with st.expander(f"📋 History for Patient {patient_id}"):
-        for i, scan in enumerate(st.session_state.patient_records[patient_id][-5:]):
+        for scan in st.session_state.patient_records[patient_id][-5:]:
             st.write(f"{scan['time']} — {scan['modality']}: {scan['prediction']}")
 
 # -------------------------------------------------------------------
@@ -199,7 +243,6 @@ if uploads:
         img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
         if img is None: continue
 
-        # Determine modality
         if override == "Chest X‑Ray": modality = "xray"
         elif override == "Brain MRI": modality = "mri"
         elif override == "Lung CT": modality = "ct"
@@ -213,19 +256,22 @@ if uploads:
 
         with torch.no_grad():
             if modality == "xray":
-                prob = torch.softmax(p_model(img_t),1).squeeze()
+                logits = p_model(img_t)
+                prob = torch.softmax(logits, 1).squeeze()
                 pred = "Pneumonia" if prob[1]>0.85 else "Normal"
                 details = [("Normal", prob[0].item()), ("Pneumonia", prob[1].item())]
                 model_used = p_model; cls = 1 if prob[1]>0.85 else 0; icon="🫁"
             elif modality == "mri":
-                prob = torch.softmax(b_model(img_t),1).squeeze()
+                logits = b_model(img_t)
+                prob = torch.softmax(logits, 1).squeeze()
                 classes = ['Glioma','Meningioma','Pituitary','Healthy']
                 pred = classes[prob.argmax().item()]
                 details = [(c, p.item()) for c,p in zip(classes, prob)]
                 model_used = b_model; cls = prob.argmax().item(); icon="🧠"
             else:
                 if l_model:
-                    prob = torch.softmax(l_model(img_t),1).squeeze()
+                    logits = l_model(img_t)
+                    prob = torch.softmax(logits, 1).squeeze()
                     classes = ['Benign','Malignant','Normal']
                     pred = classes[prob.argmax().item()]
                     details = [(c, p.item()) for c,p in zip(classes, prob)]
@@ -233,7 +279,6 @@ if uploads:
                 else: pred = "Model not trained yet"; details=[]; model_used=None; cls=0
                 icon="🫁"
 
-        # Grad‑CAM
         superimposed = None
         orig_b64 = None
         if model_used:
@@ -241,13 +286,11 @@ if uploads:
             hm = cv2.resize(hm, (img.shape[1], img.shape[0]))
             heat_colored = cv2.applyColorMap(np.uint8(255*hm), cv2.COLORMAP_JET)
             superimposed = cv2.addWeighted(cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), 0.6, heat_colored, 0.4, 0)
-            # Encode images for PDF
             _, orig_buffer = cv2.imencode('.png', img)
             orig_b64 = base64.b64encode(orig_buffer).decode()
             _, grad_buffer = cv2.imencode('.png', superimposed)
             grad_b64 = base64.b64encode(grad_buffer).decode()
 
-        # Save to patient history
         if patient_id and model_used:
             if patient_id not in st.session_state.patient_records:
                 st.session_state.patient_records[patient_id] = []
@@ -258,7 +301,6 @@ if uploads:
                 "details": details
             })
 
-        # Display images
         col_img1, col_img2 = st.columns(2)
         with col_img1:
             st.image(img, caption="Original Image", use_container_width=True, clamp=True)
@@ -266,7 +308,6 @@ if uploads:
             if superimposed is not None:
                 st.image(superimposed, caption="MEDUSA Focus (Grad‑CAM)", use_container_width=True, clamp=True)
 
-        # Diagnosis card
         st.markdown(f"<div class='diagnosis-card'><h3>{icon} {mod_disp} Analysis</h3>", unsafe_allow_html=True)
         if "Normal" in pred or "Healthy" in pred: st.success(f"## {pred}")
         elif "Pneumonia" in pred: st.error(f"## {pred}")
@@ -276,27 +317,21 @@ if uploads:
             st.progress(float(pval))
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # Radiologist override
         feedback = st.radio("Radiologist confirmation:", ["Agree", "Disagree"], key=f"fb_{upload.name}_{time.time()}")
         if feedback == "Disagree":
             correct = st.text_input("Correct diagnosis:", key=f"corr_{upload.name}_{time.time()}")
             if correct:
                 st.info(f"Override saved: {correct} (AI predicted: {pred})")
 
-        # PDF download
         if orig_b64 and grad_b64:
             pdf_b64 = generate_pdf(patient_id or "Unknown", mod_disp, details, orig_b64, grad_b64)
             href = f'<a href="data:application/pdf;base64,{pdf_b64}" download="medusa_report_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf">📄 Download PDF Report</a>'
             st.markdown(href, unsafe_allow_html=True)
 
-        # Critical alert
         if modality == "xray" and prob[1] > 0.95:
             st.error("⚠️ CRITICAL FINDING — PNEUMONIA (high confidence)")
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-# -------------------------------------------------------------------
-# Footer
-# -------------------------------------------------------------------
 st.markdown("<hr style='border:1px solid #3a3a5a;margin-top:3rem;'>", unsafe_allow_html=True)
 st.markdown("<p style='text-align:center;color:#888;'>🥬 Powered by DARKMOOR LTD · Darkmoorltd@gmail.com<br>MEDUSA · 850K params · CPU‑only · v1.0</p>", unsafe_allow_html=True)
