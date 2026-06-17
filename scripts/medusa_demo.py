@@ -71,7 +71,7 @@ class BrainTumorClassifier(nn.Module):
     def __init__(self):
         super().__init__()
         self.encoder = TinyViT()
-        self.head = nn.Linear(128, 4)
+        self.head = nn.Linear(128, 4)      # 4 classes: glioma, meningioma, pituitary, healthy
     def forward(self, x):
         feats = self.encoder(x)
         return self.head(feats[:, 0, :])
@@ -93,9 +93,12 @@ def load_models():
     p = PneumoniaClassifier()
     p.load_state_dict(torch.load('medusa_tiny_pneumonia.pt', map_location='cpu', weights_only=False), strict=False)
     p.eval()
+
     b = BrainTumorClassifier()
-    b.load_state_dict(torch.load('medusa_tiny_brain_tumor_v2.pt', map_location='cpu', weights_only=False), strict=False)
+    # Load the new 4‑class brain tumour model
+    b.load_state_dict(torch.load('medusa_tiny_brain_tumor_4class.pt', map_location='cpu', weights_only=False), strict=False)
     b.eval()
+
     l = None
     try:
         l = LungCancerClassifier()
@@ -139,10 +142,10 @@ def guess_modality(img, fname):
     else: return "mri"
 
 # -------------------------------------------------------------------
-# PDF generation – all strings use ASCII hyphens only
+# PDF generation
 # -------------------------------------------------------------------
 def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, hospital_name="DARKMOOR LTD"):
-    # Replace any non-ASCII hyphen that might slip through
+    # Replace non‑ASCII hyphens
     modality = modality.replace("\u2011", "-").replace("\u2013", "-").replace("\u2014", "-")
     patient_id = patient_id.replace("\u2011", "-").replace("\u2013", "-").replace("\u2014", "-")
     hospital_name = hospital_name.replace("\u2011", "-").replace("\u2013", "-").replace("\u2014", "-")
@@ -285,9 +288,15 @@ if uploads:
                 logits = b_model(img_t)
                 prob = torch.softmax(logits, 1).squeeze()
                 classes = ['Glioma','Meningioma','Pituitary','Healthy']
-                pred = classes[prob.argmax().item()]
+                max_prob, cls_idx = prob.max(dim=0)
+                if max_prob.item() < 0.95:
+                    pred = "Uncertain / Likely Normal"
+                    cls = 3          # fallback to Healthy index for Grad-CAM
+                else:
+                    pred = classes[cls_idx.item()]
+                    cls = cls_idx.item()
                 details = [(c, p.item()) for c,p in zip(classes, prob)]
-                model_used = b_model; cls = prob.argmax().item(); icon="🧠"
+                model_used = b_model; icon="🧠"
             else:
                 if l_model:
                     logits = l_model(img_t)
@@ -329,7 +338,7 @@ if uploads:
                 st.image(superimposed, caption="MEDUSA Focus (Grad-CAM)", width='stretch', clamp=True)
 
         st.markdown(f"<div class='diagnosis-card'><h3>{icon} {mod_disp} Analysis</h3>", unsafe_allow_html=True)
-        if "Normal" in pred or "Healthy" in pred: st.success(f"## {pred}")
+        if "Normal" in pred or "Healthy" in pred or "Uncertain" in pred: st.success(f"## {pred}")
         elif "Pneumonia" in pred: st.error(f"## {pred}")
         else: st.warning(f"## {pred}")
         for label, pval in details:
