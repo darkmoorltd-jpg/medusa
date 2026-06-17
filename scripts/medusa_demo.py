@@ -25,7 +25,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------------
-# TinyViT + classifiers (all in one file)
+# TinyViT + classifiers (pneumonia and lung cancer only)
 # -------------------------------------------------------------------
 class TransformerBlock(nn.Module):
     def __init__(self, dim, num_heads, mlp_ratio=4):
@@ -67,15 +67,6 @@ class PneumoniaClassifier(nn.Module):
         feats = self.encoder(x)
         return self.head(feats[:, 0, :])
 
-class BrainTumorClassifier(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.encoder = TinyViT()
-        self.head = nn.Linear(128, 3)      # 3 classes: Glioma, Meningioma, Pituitary
-    def forward(self, x):
-        feats = self.encoder(x)
-        return self.head(feats[:, 0, :])
-
 class LungCancerClassifier(nn.Module):
     def __init__(self):
         super().__init__()
@@ -93,20 +84,15 @@ def load_models():
     p = PneumoniaClassifier()
     p.load_state_dict(torch.load('medusa_tiny_pneumonia.pt', map_location='cpu', weights_only=False), strict=False)
     p.eval()
-
-    b = BrainTumorClassifier()
-    b.load_state_dict(torch.load('medusa_tiny_brain_tumor_v2.pt', map_location='cpu', weights_only=False), strict=False)
-    b.eval()
-
     l = None
     try:
         l = LungCancerClassifier()
         l.load_state_dict(torch.load('medusa_tiny_lung_cancer_v2.pt', map_location='cpu', weights_only=False), strict=False)
         l.eval()
     except: pass
-    return p, b, l
+    return p, l
 
-p_model, b_model, l_model = load_models()
+p_model, l_model = load_models()
 
 # -------------------------------------------------------------------
 # Grad‑CAM
@@ -129,16 +115,14 @@ def gradcam(model, img_tensor, target_layer, class_idx=None):
     return hm
 
 # -------------------------------------------------------------------
-# Modality guess
+# Modality guess (X‑ray and CT only)
 # -------------------------------------------------------------------
 def guess_modality(img, fname):
     avg = img.mean(); name = fname.lower()
     if any(w in name for w in ["xray","chest"]): return "xray"
-    if any(w in name for w in ["mri","brain","tumor","tumour"]): return "mri"
     if any(w in name for w in ["ct","lung"]): return "ct"
     if avg > 100: return "xray"
-    elif 40 <= avg <= 120: return "ct"
-    else: return "mri"
+    else: return "ct"
 
 # -------------------------------------------------------------------
 # PDF generation
@@ -151,7 +135,6 @@ def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, h
     pdf = FPDF(orientation='P', unit='mm', format='A4')
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
-    # Header
     pdf.set_fill_color(30, 30, 50)
     pdf.rect(0, 0, 210, 30, 'F')
     pdf.set_text_color(255,255,255)
@@ -178,7 +161,6 @@ def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, h
     pdf.set_font("Helvetica","",10)
     pdf.cell(0,6,datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),ln=1)
     pdf.ln(6)
-    # Images
     pdf.set_font("Helvetica","B",12)
     pdf.cell(0,8,"IMAGES",ln=1)
     pdf.ln(2)
@@ -199,7 +181,6 @@ def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, h
     pdf.text(x_right, y_img+80, "AI Focus (Grad-CAM)")
     pdf.set_y(y_img+85)
     pdf.ln(8)
-    # Findings
     pdf.set_font("Helvetica","B",12)
     pdf.cell(0,8,"FINDINGS",ln=1)
     pdf.ln(2)
@@ -215,11 +196,9 @@ def generate_pdf(patient_id, modality, predictions, original_b64, gradcam_b64, h
         pdf.cell(40,7,f"{prob:.1%}",border=1,align='C')
         pdf.ln()
     pdf.ln(5)
-    # Disclaimer
     pdf.set_font("Helvetica","I",7)
     pdf.set_text_color(100,100,100)
     pdf.multi_cell(0,4,"Disclaimer: MEDUSA is an AI screening tool. This report is intended to assist qualified radiologists; it does not constitute a final medical diagnosis. Always correlate with clinical findings.")
-    # Footer
     pdf.set_y(-20)
     pdf.set_font("Helvetica","",7)
     pdf.set_text_color(150,150,150)
@@ -252,24 +231,23 @@ if patient_id and patient_id in st.session_state.patient_records:
             st.write(f"{scan['time']} — {scan['modality']}: {scan['prediction']}")
 
 # -------------------------------------------------------------------
-# Upload section
+# Upload section (X‑ray and CT only)
 # -------------------------------------------------------------------
-uploads = st.file_uploader("Upload chest X-rays, brain MRIs, or lung CT slices", type=["jpg","jpeg","png"], accept_multiple_files=True, label_visibility="collapsed")
+uploads = st.file_uploader("Upload chest X‑rays or lung CT slices", type=["jpg","jpeg","png"], accept_multiple_files=True, label_visibility="collapsed")
 
 if uploads:
-    override = st.radio("Modality (override if auto-detection fails):", ["Auto-Detect", "Chest X-Ray", "Brain MRI", "Lung CT"], horizontal=True)
+    override = st.radio("Modality (override if auto-detection fails):", ["Auto-Detect", "Chest X‑Ray", "Lung CT"], horizontal=True)
 
     for upload in uploads:
         file_bytes = np.asarray(bytearray(upload.read()), dtype=np.uint8)
         img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
         if img is None: continue
 
-        if override == "Chest X-Ray": modality = "xray"
-        elif override == "Brain MRI": modality = "mri"
+        if override == "Chest X‑Ray": modality = "xray"
         elif override == "Lung CT": modality = "ct"
         else: modality = guess_modality(img, upload.name)
 
-        mod_names = {"xray":"Chest X-Ray","mri":"Brain MRI","ct":"Lung CT"}
+        mod_names = {"xray":"Chest X‑Ray","ct":"Lung CT"}
         mod_disp = mod_names.get(modality, "Unknown")
 
         img_resized = cv2.resize(img, (224,224))
@@ -282,14 +260,7 @@ if uploads:
                 pred = "Pneumonia" if prob[1]>0.85 else "Normal"
                 details = [("Normal", prob[0].item()), ("Pneumonia", prob[1].item())]
                 model_used = p_model; cls = 1 if prob[1]>0.85 else 0; icon="🫁"
-            elif modality == "mri":
-                logits = b_model(img_t)
-                prob = torch.softmax(logits, 1).squeeze()
-                classes = ['Glioma','Meningioma','Pituitary']
-                pred = classes[prob.argmax().item()]
-                details = [(c, p.item()) for c,p in zip(classes, prob)]
-                model_used = b_model; cls = prob.argmax().item(); icon="🧠"
-            else:
+            else:   # ct
                 if l_model:
                     logits = l_model(img_t)
                     prob = torch.softmax(logits, 1).squeeze()
@@ -330,7 +301,7 @@ if uploads:
                 st.image(superimposed, caption="MEDUSA Focus (Grad-CAM)", width='stretch', clamp=True)
 
         st.markdown(f"<div class='diagnosis-card'><h3>{icon} {mod_disp} Analysis</h3>", unsafe_allow_html=True)
-        if "Normal" in pred or "Healthy" in pred: st.success(f"## {pred}")
+        if "Normal" in pred: st.success(f"## {pred}")
         elif "Pneumonia" in pred: st.error(f"## {pred}")
         else: st.warning(f"## {pred}")
         for label, pval in details:
