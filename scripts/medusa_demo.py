@@ -58,6 +58,9 @@ class TinyViT(nn.Module):
         x = self.blocks(x)
         return self.norm(x)
 
+# -------------------------------------------------------------------
+# Classifier definitions
+# -------------------------------------------------------------------
 class PneumoniaClassifier(nn.Module):
     def __init__(self): super().__init__(); self.encoder = TinyViT(); self.head = nn.Linear(128, 2)
     def forward(self, x): return self.head(self.encoder(x)[:, 0, :])
@@ -66,8 +69,8 @@ class TBClassifierModel(nn.Module):
     def __init__(self): super().__init__(); self.encoder = TinyViT(); self.head = nn.Linear(128, 2)
     def forward(self, x): return self.head(self.encoder(x)[:, 0, :])
 
-class BrainTumorClassifier(nn.Module):
-    def __init__(self): super().__init__(); self.encoder = TinyViT(); self.head = nn.Linear(128, 4)
+class BinaryBrainTumorModel(nn.Module):
+    def __init__(self): super().__init__(); self.encoder = TinyViT(); self.head = nn.Linear(128, 2)
     def forward(self, x): return self.head(self.encoder(x)[:, 0, :])
 
 class LungCancerClassifier(nn.Module):
@@ -91,8 +94,8 @@ def load_models():
     p.load_state_dict(torch.load('medusa_tiny_pneumonia.pt', map_location='cpu', weights_only=False), strict=False); p.eval()
     tb = TBClassifierModel()
     tb.load_state_dict(torch.load('medusa_tiny_tb.pt', map_location='cpu', weights_only=False), strict=False); tb.eval()
-    b = BrainTumorClassifier()
-    b.load_state_dict(torch.load('medusa_tiny_brain_tumor_4class.pt', map_location='cpu', weights_only=False), strict=False); b.eval()
+    b = BinaryBrainTumorModel()
+    b.load_state_dict(torch.load('medusa_tiny_brain_tumor_binary.pt', map_location='cpu', weights_only=False), strict=False); b.eval()
     l = None
     try:
         l = LungCancerClassifier()
@@ -139,18 +142,11 @@ def guess_modality(img, fname):
     if any(w in name for w in ["xray","chest","tb","normal","pneumonia"]): return "xray"
     if any(w in name for w in ["mri","brain","tumor","tumour"]): return "mri"
     if any(w in name for w in ["ct","lung"]): return "ct"
-    # Microscopy RBC (malaria keywords)
-    if any(w in name for w in ["malaria","plasmodium","parasitized","uninfected","rbc","red blood"]):
-        return "microscopy_rbc"
-    # Microscopy WBC (leukemia keywords)
-    if any(w in name for w in ["leukemia","leuk","all","hem","blast","wbc","white blood"]):
-        return "microscopy_wbc"
-    # Fallback by brightness (microscopy images are often dark)
-    if avg < 80:
-        # Heuristic: if very dark with small bright spots, likely microscopy
-        return "microscopy_rbc"   # default to RBC if unsure
+    if any(w in name for w in ["malaria","plasmodium","parasitized","uninfected","rbc","red blood"]): return "microscopy_rbc"
+    if any(w in name for w in ["leukemia","leuk","all","hem","blast","wbc","white blood"]): return "microscopy_wbc"
     if avg > 100: return "xray"
     elif 40 <= avg <= 120: return "ct"
+    elif avg < 80: return "microscopy_rbc"
     else: return "mri"
 
 # -------------------------------------------------------------------
@@ -271,7 +267,7 @@ if uploads:
         img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
         if img is None: continue
 
-        # Determine modality from override
+        # Determine modality
         if override == "Chest X-Ray": modality = "xray"
         elif override == "Brain MRI": modality = "mri"
         elif override == "Lung CT": modality = "ct"
@@ -290,12 +286,14 @@ if uploads:
         with torch.no_grad():
             # ── CHEST X-RAY ──
             if modality == "xray":
+                # Pneumonia
                 logits_p = p_model(img_t)
                 prob_p = torch.softmax(logits_p, 1).squeeze()
                 pred_p = "Pneumonia" if prob_p[1]>0.85 else "Normal"
                 details_p = [("Normal", prob_p[0].item()), ("Pneumonia", prob_p[1].item())]
                 cls_p = 1 if prob_p[1]>0.85 else 0
 
+                # TB
                 logits_tb = tb_model(img_t)
                 prob_tb = torch.softmax(logits_tb, 1).squeeze()
                 pred_tb = "TB Positive" if prob_tb[1]>0.85 else "TB Negative"
@@ -340,19 +338,17 @@ if uploads:
                 if prob_p[1] > 0.95: st.error("⚠️ CRITICAL FINDING — PNEUMONIA")
                 if prob_tb[1] > 0.95: st.error("⚠️ CRITICAL FINDING — TUBERCULOSIS")
 
-            # ── BRAIN MRI ──
+            # ── BRAIN MRI (BINARY) ──
             elif modality == "mri":
                 logits = b_model(img_t)
                 prob = torch.softmax(logits, 1).squeeze()
-                classes = ['Glioma','Meningioma','Pituitary','No Tumor']
-                max_prob, cls_idx = prob.max(dim=0)
-                if max_prob.item() < 0.95: pred = "Uncertain / Likely Normal"; cls = 3
-                else: pred = classes[cls_idx.item()]; cls = cls_idx.item()
-                details = [(c, p.item()) for c,p in zip(classes, prob)]
+                pred = "Tumour Detected" if prob[1] > 0.5 else "Likely Normal"
+                details = [("Normal", prob[0].item()), ("Tumour", prob[1].item())]
+                cls = 1 if prob[1] > 0.5 else 0
 
                 st.markdown(f"<div class='diagnosis-card'><h3>🧠 Brain MRI Analysis</h3>", unsafe_allow_html=True)
-                if "Normal" in pred or "No Tumor" in pred or "Uncertain" in pred: st.success(f"## {pred}")
-                else: st.warning(f"## {pred}")
+                if pred == "Likely Normal": st.success(f"## {pred}")
+                else: st.error(f"## {pred}")
                 for label, pval in details:
                     st.markdown(f"<div class='metric-card'>{label}: <b>{pval:.1%}</b></div>", unsafe_allow_html=True)
                     st.progress(float(pval))
@@ -424,7 +420,7 @@ if uploads:
                     correct = st.text_input("Correct diagnosis:", key=f"corr_{upload.name}_{time.time()}")
                     if correct: st.info(f"Override saved: {correct} (AI predicted: {pred})")
 
-            # ── MICROSCOPY: RED BLOOD CELLS (MALARIA) ──
+            # ── MICROSCOPY: RBC (MALARIA) ──
             elif modality == "microscopy_rbc":
                 if mal_model:
                     logits_mal = mal_model(img_t)
@@ -451,7 +447,6 @@ if uploads:
                 else: st.info("Malaria model not loaded.")
                 st.markdown("</div>", unsafe_allow_html=True)
 
-                # PDF for malaria
                 if mal_model:
                     _, orig_buffer = cv2.imencode('.png', img)
                     orig_b64 = base64.b64encode(orig_buffer).decode()
@@ -461,7 +456,7 @@ if uploads:
                     href = f'<a href="data:application/pdf;base64,{pdf_b64}" download="medusa_report_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf">📄 Download PDF Report</a>'
                     st.markdown(href, unsafe_allow_html=True)
 
-            # ── MICROSCOPY: WHITE BLOOD CELLS (LEUKEMIA) ──
+            # ── MICROSCOPY: WBC (LEUKEMIA) ──
             elif modality == "microscopy_wbc":
                 if leu_model:
                     logits_leu = leu_model(img_t)
@@ -488,7 +483,6 @@ if uploads:
                 else: st.info("Leukemia model not loaded.")
                 st.markdown("</div>", unsafe_allow_html=True)
 
-                # PDF for leukemia
                 if leu_model:
                     _, orig_buffer = cv2.imencode('.png', img)
                     orig_b64 = base64.b64encode(orig_buffer).decode()
