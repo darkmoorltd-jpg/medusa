@@ -139,8 +139,16 @@ def guess_modality(img, fname):
     if any(w in name for w in ["xray","chest","tb","normal","pneumonia"]): return "xray"
     if any(w in name for w in ["mri","brain","tumor","tumour"]): return "mri"
     if any(w in name for w in ["ct","lung"]): return "ct"
-    if any(w in name for w in ["malaria","plasmodium","parasitized","uninfected","cell","microscopy"]): return "microscopy"
-    if any(w in name for w in ["leukemia","leuk","all","hem","blast"]): return "microscopy"
+    # Microscopy RBC (malaria keywords)
+    if any(w in name for w in ["malaria","plasmodium","parasitized","uninfected","rbc","red blood"]):
+        return "microscopy_rbc"
+    # Microscopy WBC (leukemia keywords)
+    if any(w in name for w in ["leukemia","leuk","all","hem","blast","wbc","white blood"]):
+        return "microscopy_wbc"
+    # Fallback by brightness (microscopy images are often dark)
+    if avg < 80:
+        # Heuristic: if very dark with small bright spots, likely microscopy
+        return "microscopy_rbc"   # default to RBC if unsure
     if avg > 100: return "xray"
     elif 40 <= avg <= 120: return "ct"
     else: return "mri"
@@ -250,38 +258,44 @@ if patient_id and patient_id in st.session_state.patient_records:
 # -------------------------------------------------------------------
 # Upload section
 # -------------------------------------------------------------------
-uploads = st.file_uploader("Upload chest X-rays, brain MRIs, lung CT slices, or microscopy images", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
+uploads = st.file_uploader("Upload medical images", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
 
 if uploads:
-    override = st.radio("Modality (override if auto-detection fails):", ["Auto-Detect", "Chest X-Ray", "Brain MRI", "Lung CT", "Microscopy"], horizontal=True)
+    override = st.radio("Modality (override if auto-detection fails):",
+                       ["Auto-Detect", "Chest X-Ray", "Brain MRI", "Lung CT",
+                        "Microscopy (RBC - Malaria)", "Microscopy (WBC - Leukemia)"],
+                       horizontal=True)
 
     for upload in uploads:
         file_bytes = np.asarray(bytearray(upload.read()), dtype=np.uint8)
         img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
         if img is None: continue
 
+        # Determine modality from override
         if override == "Chest X-Ray": modality = "xray"
         elif override == "Brain MRI": modality = "mri"
         elif override == "Lung CT": modality = "ct"
-        elif override == "Microscopy": modality = "microscopy"
+        elif override == "Microscopy (RBC - Malaria)": modality = "microscopy_rbc"
+        elif override == "Microscopy (WBC - Leukemia)": modality = "microscopy_wbc"
         else: modality = guess_modality(img, upload.name)
 
-        mod_names = {"xray":"Chest X-Ray","mri":"Brain MRI","ct":"Lung CT","microscopy":"Microscopy"}
+        mod_names = {"xray":"Chest X-Ray","mri":"Brain MRI","ct":"Lung CT",
+                     "microscopy_rbc":"Microscopy - Red Blood Cells",
+                     "microscopy_wbc":"Microscopy - White Blood Cells"}
         mod_disp = mod_names.get(modality, "Unknown")
 
         img_resized = cv2.resize(img, (224,224))
         img_t = torch.from_numpy(img_resized).unsqueeze(0).unsqueeze(0).float()/255
 
         with torch.no_grad():
+            # ── CHEST X-RAY ──
             if modality == "xray":
-                # Pneumonia
                 logits_p = p_model(img_t)
                 prob_p = torch.softmax(logits_p, 1).squeeze()
                 pred_p = "Pneumonia" if prob_p[1]>0.85 else "Normal"
                 details_p = [("Normal", prob_p[0].item()), ("Pneumonia", prob_p[1].item())]
                 cls_p = 1 if prob_p[1]>0.85 else 0
 
-                # TB
                 logits_tb = tb_model(img_t)
                 prob_tb = torch.softmax(logits_tb, 1).squeeze()
                 pred_tb = "TB Positive" if prob_tb[1]>0.85 else "TB Negative"
@@ -296,7 +310,6 @@ if uploads:
                     st.markdown(f"<div class='metric-card'>{label}: <b>{pval:.1%}</b></div>", unsafe_allow_html=True)
                     st.progress(float(pval))
 
-                # Grad‑CAM pneumonia
                 hm_p = gradcam(p_model, img_resized, cls_p)
                 hm_p = cv2.resize(hm_p, (img.shape[1], img.shape[0]))
                 heat_p = cv2.applyColorMap(np.uint8(255*hm_p), cv2.COLORMAP_JET)
@@ -315,7 +328,6 @@ if uploads:
                     st.progress(float(pval))
                 st.markdown("</div>", unsafe_allow_html=True)
 
-                # PDF
                 _, orig_buffer = cv2.imencode('.png', img)
                 orig_b64 = base64.b64encode(orig_buffer).decode()
                 _, grad_buffer = cv2.imencode('.png', superimposed_p)
@@ -328,6 +340,7 @@ if uploads:
                 if prob_p[1] > 0.95: st.error("⚠️ CRITICAL FINDING — PNEUMONIA")
                 if prob_tb[1] > 0.95: st.error("⚠️ CRITICAL FINDING — TUBERCULOSIS")
 
+            # ── BRAIN MRI ──
             elif modality == "mri":
                 logits = b_model(img_t)
                 prob = torch.softmax(logits, 1).squeeze()
@@ -367,6 +380,7 @@ if uploads:
                     correct = st.text_input("Correct diagnosis:", key=f"corr_{upload.name}_{time.time()}")
                     if correct: st.info(f"Override saved: {correct} (AI predicted: {pred})")
 
+            # ── LUNG CT ──
             elif modality == "ct":
                 if l_model:
                     logits = l_model(img_t)
@@ -410,38 +424,23 @@ if uploads:
                     correct = st.text_input("Correct diagnosis:", key=f"corr_{upload.name}_{time.time()}")
                     if correct: st.info(f"Override saved: {correct} (AI predicted: {pred})")
 
-            elif modality == "microscopy":
-                # ── MALARIA SECTION ──
+            # ── MICROSCOPY: RED BLOOD CELLS (MALARIA) ──
+            elif modality == "microscopy_rbc":
                 if mal_model:
                     logits_mal = mal_model(img_t)
                     prob_mal = torch.softmax(logits_mal, 1).squeeze()
                     pred_mal = "Parasitized" if prob_mal[1]>0.5 else "Uninfected"
                     details_mal = [("Uninfected", prob_mal[0].item()), ("Parasitized", prob_mal[1].item())]
                     cls_mal = 1 if prob_mal[1]>0.5 else 0
-                else:
-                    pred_mal = "Model not trained"; details_mal=[]; cls_mal=0
+                else: pred_mal = "Model not trained"; details_mal=[]; cls_mal=0
 
-                # ── LEUKEMIA SECTION ──
-                if leu_model:
-                    logits_leu = leu_model(img_t)
-                    prob_leu = torch.softmax(logits_leu, 1).squeeze()
-                    pred_leu = "ALL (Cancer)" if prob_leu[1]>0.5 else "HEM (Normal)"
-                    details_leu = [("HEM (Normal)", prob_leu[0].item()), ("ALL (Cancer)", prob_leu[1].item())]
-                    cls_leu = 1 if prob_leu[1]>0.5 else 0
-                else:
-                    pred_leu = "Model not trained"; details_leu=[]; cls_leu=0
-
-                st.markdown("<div class='diagnosis-card'><h3>🔬 Microscopy Analysis</h3>", unsafe_allow_html=True)
-
-                # Malaria
-                st.markdown("#### 🦟 Malaria")
+                st.markdown("<div class='diagnosis-card'><h3>🔴 Microscopic Red Blood Cells (Malaria)</h3>", unsafe_allow_html=True)
                 if mal_model:
                     if pred_mal == "Uninfected": st.success(f"**Result:** {pred_mal}")
                     else: st.error(f"**Result:** {pred_mal}")
                     for label, pval in details_mal:
                         st.markdown(f"<div class='metric-card'>{label}: <b>{pval:.1%}</b></div>", unsafe_allow_html=True)
                         st.progress(float(pval))
-                    # Grad‑CAM malaria
                     hm_mal = gradcam(mal_model, img_resized, cls_mal)
                     hm_mal = cv2.resize(hm_mal, (img.shape[1], img.shape[0]))
                     heat_mal = cv2.applyColorMap(np.uint8(255*hm_mal), cv2.COLORMAP_JET)
@@ -449,20 +448,36 @@ if uploads:
                     col1, col2 = st.columns(2)
                     with col1: st.image(img, caption="Original", width='stretch', clamp=True)
                     with col2: st.image(superimposed_mal, caption="Malaria Focus", width='stretch', clamp=True)
-                else:
-                    st.info("Malaria model not loaded.")
+                else: st.info("Malaria model not loaded.")
+                st.markdown("</div>", unsafe_allow_html=True)
 
-                st.markdown("---")
+                # PDF for malaria
+                if mal_model:
+                    _, orig_buffer = cv2.imencode('.png', img)
+                    orig_b64 = base64.b64encode(orig_buffer).decode()
+                    _, grad_buffer = cv2.imencode('.png', superimposed_mal)
+                    grad_b64 = base64.b64encode(grad_buffer).decode()
+                    pdf_b64 = generate_pdf(patient_id or "Unknown", "Microscopy - RBC (Malaria)", details_mal, orig_b64, grad_b64)
+                    href = f'<a href="data:application/pdf;base64,{pdf_b64}" download="medusa_report_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf">📄 Download PDF Report</a>'
+                    st.markdown(href, unsafe_allow_html=True)
 
-                # Leukemia
-                st.markdown("#### 🩸 Leukemia")
+            # ── MICROSCOPY: WHITE BLOOD CELLS (LEUKEMIA) ──
+            elif modality == "microscopy_wbc":
+                if leu_model:
+                    logits_leu = leu_model(img_t)
+                    prob_leu = torch.softmax(logits_leu, 1).squeeze()
+                    pred_leu = "ALL (Cancer)" if prob_leu[1]>0.5 else "HEM (Normal)"
+                    details_leu = [("HEM (Normal)", prob_leu[0].item()), ("ALL (Cancer)", prob_leu[1].item())]
+                    cls_leu = 1 if prob_leu[1]>0.5 else 0
+                else: pred_leu = "Model not trained"; details_leu=[]; cls_leu=0
+
+                st.markdown("<div class='diagnosis-card'><h3>⚪ Microscopic White Blood Cells (Leukemia)</h3>", unsafe_allow_html=True)
                 if leu_model:
                     if pred_leu == "HEM (Normal)": st.success(f"**Result:** {pred_leu}")
                     else: st.error(f"**Result:** {pred_leu}")
                     for label, pval in details_leu:
                         st.markdown(f"<div class='metric-card'>{label}: <b>{pval:.1%}</b></div>", unsafe_allow_html=True)
                         st.progress(float(pval))
-                    # Grad‑CAM leukemia
                     hm_leu = gradcam(leu_model, img_resized, cls_leu)
                     hm_leu = cv2.resize(hm_leu, (img.shape[1], img.shape[0]))
                     heat_leu = cv2.applyColorMap(np.uint8(255*hm_leu), cv2.COLORMAP_JET)
@@ -470,19 +485,16 @@ if uploads:
                     col1, col2 = st.columns(2)
                     with col1: st.image(img, caption="Original", width='stretch', clamp=True)
                     with col2: st.image(superimposed_leu, caption="Leukemia Focus", width='stretch', clamp=True)
-                else:
-                    st.info("Leukemia model not loaded.")
-
+                else: st.info("Leukemia model not loaded.")
                 st.markdown("</div>", unsafe_allow_html=True)
 
-                # PDF for microscopy (uses malaria heatmap as primary)
-                if mal_model:
+                # PDF for leukemia
+                if leu_model:
                     _, orig_buffer = cv2.imencode('.png', img)
                     orig_b64 = base64.b64encode(orig_buffer).decode()
-                    _, grad_buffer = cv2.imencode('.png', superimposed_mal)
+                    _, grad_buffer = cv2.imencode('.png', superimposed_leu)
                     grad_b64 = base64.b64encode(grad_buffer).decode()
-                    all_details = details_mal + details_leu
-                    pdf_b64 = generate_pdf(patient_id or "Unknown", "Microscopy", all_details, orig_b64, grad_b64)
+                    pdf_b64 = generate_pdf(patient_id or "Unknown", "Microscopy - WBC (Leukemia)", details_leu, orig_b64, grad_b64)
                     href = f'<a href="data:application/pdf;base64,{pdf_b64}" download="medusa_report_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf">📄 Download PDF Report</a>'
                     st.markdown(href, unsafe_allow_html=True)
 
