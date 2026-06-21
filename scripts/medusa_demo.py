@@ -85,6 +85,14 @@ class LeukemiaClassifierModel(nn.Module):
     def __init__(self): super().__init__(); self.encoder = TinyViT(); self.head = nn.Linear(128, 2)
     def forward(self, x): return self.head(self.encoder(x)[:, 0, :])
 
+class SkinCancerModel(nn.Module):
+    def __init__(self): super().__init__(); self.encoder = TinyViT(); self.head = nn.Linear(128, 2)
+    def forward(self, x): return self.head(self.encoder(x)[:, 0, :])
+
+class FractureModel(nn.Module):
+    def __init__(self): super().__init__(); self.encoder = TinyViT(); self.head = nn.Linear(128, 2)
+    def forward(self, x): return self.head(self.encoder(x)[:, 0, :])
+
 # -------------------------------------------------------------------
 # Model loading (cached)
 # -------------------------------------------------------------------
@@ -111,9 +119,19 @@ def load_models():
         leu = LeukemiaClassifierModel()
         leu.load_state_dict(torch.load('medusa_tiny_leukemia.pt', map_location='cpu', weights_only=False), strict=False); leu.eval()
     except: pass
-    return p, tb, b, l, mal, leu
+    skin = None
+    try:
+        skin = SkinCancerModel()
+        skin.load_state_dict(torch.load('medusa_tiny_skin_cancer.pt', map_location='cpu', weights_only=False), strict=False); skin.eval()
+    except: pass
+    fracture = None
+    try:
+        fracture = FractureModel()
+        fracture.load_state_dict(torch.load('medusa_tiny_bone_fracture.pt', map_location='cpu', weights_only=False), strict=False); fracture.eval()
+    except: pass
+    return p, tb, b, l, mal, leu, skin, fracture
 
-p_model, tb_model, b_model, l_model, mal_model, leu_model = load_models()
+p_model, tb_model, b_model, l_model, mal_model, leu_model, skin_model, fracture_model = load_models()
 
 # -------------------------------------------------------------------
 # Grad‑CAM via Captum
@@ -139,11 +157,12 @@ except ImportError:
 # -------------------------------------------------------------------
 def guess_modality(img, fname):
     avg = img.mean(); name = fname.lower()
-    if any(w in name for w in ["xray","chest","tb","normal","pneumonia"]): return "xray"
+    if any(w in name for w in ["xray","chest","tb","normal","pneumonia","fracture","bone"]): return "xray"
     if any(w in name for w in ["mri","brain","tumor","tumour"]): return "mri"
     if any(w in name for w in ["ct","lung"]): return "ct"
     if any(w in name for w in ["malaria","plasmodium","parasitized","uninfected","rbc","red blood"]): return "microscopy_rbc"
     if any(w in name for w in ["leukemia","leuk","all","hem","blast","wbc","white blood"]): return "microscopy_wbc"
+    if any(w in name for w in ["skin","derm","melanoma","lesion","ham"]): return "dermoscopy"
     if avg > 100: return "xray"
     elif 40 <= avg <= 120: return "ct"
     elif avg < 80: return "microscopy_rbc"
@@ -259,7 +278,8 @@ uploads = st.file_uploader("Upload medical images", type=["jpg","jpeg","png","bm
 if uploads:
     override = st.radio("Modality (override if auto-detection fails):",
                        ["Auto-Detect", "Chest X-Ray", "Brain MRI", "Lung CT",
-                        "Microscopy (RBC - Malaria)", "Microscopy (WBC - Leukemia)"],
+                        "Microscopy (RBC - Malaria)", "Microscopy (WBC - Leukemia)",
+                        "Dermoscopy (Skin Cancer)", "Bone X-Ray (Fracture)"],
                        horizontal=True)
 
     for upload in uploads:
@@ -273,11 +293,15 @@ if uploads:
         elif override == "Lung CT": modality = "ct"
         elif override == "Microscopy (RBC - Malaria)": modality = "microscopy_rbc"
         elif override == "Microscopy (WBC - Leukemia)": modality = "microscopy_wbc"
+        elif override == "Dermoscopy (Skin Cancer)": modality = "dermoscopy"
+        elif override == "Bone X-Ray (Fracture)": modality = "fracture"
         else: modality = guess_modality(img, upload.name)
 
         mod_names = {"xray":"Chest X-Ray","mri":"Brain MRI","ct":"Lung CT",
                      "microscopy_rbc":"Microscopy - Red Blood Cells",
-                     "microscopy_wbc":"Microscopy - White Blood Cells"}
+                     "microscopy_wbc":"Microscopy - White Blood Cells",
+                     "dermoscopy":"Dermoscopy (Skin Cancer)",
+                     "fracture":"Bone X-Ray (Fracture)"}
         mod_disp = mod_names.get(modality, "Unknown")
 
         img_resized = cv2.resize(img, (224,224))
@@ -286,14 +310,12 @@ if uploads:
         with torch.no_grad():
             # ── CHEST X-RAY ──
             if modality == "xray":
-                # Pneumonia
                 logits_p = p_model(img_t)
                 prob_p = torch.softmax(logits_p, 1).squeeze()
                 pred_p = "Pneumonia" if prob_p[1]>0.85 else "Normal"
                 details_p = [("Normal", prob_p[0].item()), ("Pneumonia", prob_p[1].item())]
                 cls_p = 1 if prob_p[1]>0.85 else 0
 
-                # TB
                 logits_tb = tb_model(img_t)
                 prob_tb = torch.softmax(logits_tb, 1).squeeze()
                 pred_tb = "TB Positive" if prob_tb[1]>0.85 else "TB Negative"
@@ -489,6 +511,78 @@ if uploads:
                     _, grad_buffer = cv2.imencode('.png', superimposed_leu)
                     grad_b64 = base64.b64encode(grad_buffer).decode()
                     pdf_b64 = generate_pdf(patient_id or "Unknown", "Microscopy - WBC (Leukemia)", details_leu, orig_b64, grad_b64)
+                    href = f'<a href="data:application/pdf;base64,{pdf_b64}" download="medusa_report_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf">📄 Download PDF Report</a>'
+                    st.markdown(href, unsafe_allow_html=True)
+
+            # ── DERMOSCOPY (SKIN CANCER) ──
+            elif modality == "dermoscopy":
+                if skin_model:
+                    logits_skin = skin_model(img_t)
+                    prob_skin = torch.softmax(logits_skin, 1).squeeze()
+                    pred_skin = "Malignant" if prob_skin[1]>0.5 else "Benign"
+                    details_skin = [("Benign", prob_skin[0].item()), ("Malignant", prob_skin[1].item())]
+                    cls_skin = 1 if prob_skin[1]>0.5 else 0
+                else: pred_skin = "Model not trained"; details_skin=[]; cls_skin=0
+
+                st.markdown("<div class='diagnosis-card'><h3>🔬 Dermoscopy – Skin Cancer</h3>", unsafe_allow_html=True)
+                if skin_model:
+                    if pred_skin == "Benign": st.success(f"**Result:** {pred_skin}")
+                    else: st.error(f"**Result:** {pred_skin}")
+                    for label, pval in details_skin:
+                        st.markdown(f"<div class='metric-card'>{label}: <b>{pval:.1%}</b></div>", unsafe_allow_html=True)
+                        st.progress(float(pval))
+                    hm_skin = gradcam(skin_model, img_resized, cls_skin)
+                    hm_skin = cv2.resize(hm_skin, (img.shape[1], img.shape[0]))
+                    heat_skin = cv2.applyColorMap(np.uint8(255*hm_skin), cv2.COLORMAP_JET)
+                    superimposed_skin = cv2.addWeighted(cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), 0.6, heat_skin, 0.4, 0)
+                    col1, col2 = st.columns(2)
+                    with col1: st.image(img, caption="Original", width='stretch', clamp=True)
+                    with col2: st.image(superimposed_skin, caption="Skin Cancer Focus", width='stretch', clamp=True)
+                else: st.info("Skin cancer model not loaded.")
+                st.markdown("</div>", unsafe_allow_html=True)
+
+                if skin_model:
+                    _, orig_buffer = cv2.imencode('.png', img)
+                    orig_b64 = base64.b64encode(orig_buffer).decode()
+                    _, grad_buffer = cv2.imencode('.png', superimposed_skin)
+                    grad_b64 = base64.b64encode(grad_buffer).decode()
+                    pdf_b64 = generate_pdf(patient_id or "Unknown", "Dermoscopy - Skin Cancer", details_skin, orig_b64, grad_b64)
+                    href = f'<a href="data:application/pdf;base64,{pdf_b64}" download="medusa_report_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf">📄 Download PDF Report</a>'
+                    st.markdown(href, unsafe_allow_html=True)
+
+            # ── BONE X-RAY (FRACTURE) ──
+            elif modality == "fracture":
+                if fracture_model:
+                    logits_fx = fracture_model(img_t)
+                    prob_fx = torch.softmax(logits_fx, 1).squeeze()
+                    pred_fx = "Fracture" if prob_fx[1]>0.5 else "Normal"
+                    details_fx = [("Normal", prob_fx[0].item()), ("Fracture", prob_fx[1].item())]
+                    cls_fx = 1 if prob_fx[1]>0.5 else 0
+                else: pred_fx = "Model not trained"; details_fx=[]; cls_fx=0
+
+                st.markdown("<div class='diagnosis-card'><h3>🦴 Bone X-Ray – Fracture Detection</h3>", unsafe_allow_html=True)
+                if fracture_model:
+                    if pred_fx == "Normal": st.success(f"**Result:** {pred_fx}")
+                    else: st.error(f"**Result:** {pred_fx}")
+                    for label, pval in details_fx:
+                        st.markdown(f"<div class='metric-card'>{label}: <b>{pval:.1%}</b></div>", unsafe_allow_html=True)
+                        st.progress(float(pval))
+                    hm_fx = gradcam(fracture_model, img_resized, cls_fx)
+                    hm_fx = cv2.resize(hm_fx, (img.shape[1], img.shape[0]))
+                    heat_fx = cv2.applyColorMap(np.uint8(255*hm_fx), cv2.COLORMAP_JET)
+                    superimposed_fx = cv2.addWeighted(cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), 0.6, heat_fx, 0.4, 0)
+                    col1, col2 = st.columns(2)
+                    with col1: st.image(img, caption="Original", width='stretch', clamp=True)
+                    with col2: st.image(superimposed_fx, caption="Fracture Focus", width='stretch', clamp=True)
+                else: st.info("Bone fracture model not loaded.")
+                st.markdown("</div>", unsafe_allow_html=True)
+
+                if fracture_model:
+                    _, orig_buffer = cv2.imencode('.png', img)
+                    orig_b64 = base64.b64encode(orig_buffer).decode()
+                    _, grad_buffer = cv2.imencode('.png', superimposed_fx)
+                    grad_b64 = base64.b64encode(grad_buffer).decode()
+                    pdf_b64 = generate_pdf(patient_id or "Unknown", "Bone X-Ray - Fracture", details_fx, orig_b64, grad_b64)
                     href = f'<a href="data:application/pdf;base64,{pdf_b64}" download="medusa_report_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf">📄 Download PDF Report</a>'
                     st.markdown(href, unsafe_allow_html=True)
 
